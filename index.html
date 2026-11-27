@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Счётчик медитаций</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -91,14 +93,24 @@
   #add.flash { animation: flash .6s ease-out; }
   @keyframes flash { 0% { filter: saturate(1.3) brightness(1.5); } 100% { filter: saturate(1.3); } }
 
-  #undo {
-    border: 0; background: none; padding: .4rem .8rem; border-radius: 999px;
+  .links { display: flex; flex-wrap: wrap; justify-content: center; gap: .25rem 1rem; }
+  .link {
+    border: 0; background: none; padding: .4rem .6rem; border-radius: 999px;
     color: var(--muted); font: 500 .85rem var(--font-body); cursor: pointer;
     text-decoration: underline; text-underline-offset: 3px;
-    visibility: hidden;
   }
-  #undo.on { visibility: visible; }
-  #undo:hover { color: var(--fg); }
+  .link:hover { color: var(--fg); }
+  .link:focus-visible { outline: 2px solid var(--fg); }
+  #edit-form { display: flex; gap: .5rem; align-items: center; }
+  #edit-input {
+    width: 8rem; padding: .55rem .75rem; border-radius: 12px;
+    border: 1px solid var(--muted); background: var(--bg); color: var(--fg);
+    font: 500 1.1rem var(--font-body); text-align: center; font-variant-numeric: tabular-nums;
+  }
+  #edit-save {
+    padding: .6rem 1rem; border-radius: 12px; border: 0; cursor: pointer;
+    background: var(--fg); color: var(--bg); font: 500 .95rem var(--font-body);
+  }
   .note { margin: 0; font-size: .8rem; color: var(--muted); max-width: 32ch; text-align: center; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -111,7 +123,14 @@
   <div class="breath">
     <button id="add" type="button" aria-label="Добавить медитацию">0</button>
   </div>
-  <button id="undo" type="button">Отменить последнюю</button>
+  <div class="links">
+    <button class="link" id="undo" type="button" hidden>Отменить последнюю</button>
+    <button class="link" id="edit" type="button">Изменить число</button>
+  </div>
+  <form id="edit-form" hidden>
+    <input id="edit-input" type="number" inputmode="numeric" min="0" step="1" aria-label="Сколько медитаций уже сделано">
+    <button id="edit-save" type="submit">Сохранить</button>
+  </form>
   <p class="note" id="note" hidden></p>
 </main>
 
@@ -122,6 +141,9 @@
     add: document.getElementById("add"),
     undo: document.getElementById("undo"),
     note: document.getElementById("note"),
+    edit: document.getElementById("edit"),
+    form: document.getElementById("edit-form"),
+    input: document.getElementById("edit-input"),
   };
 
   // state: { count, days: { "YYYY-MM-DD": n }, last: [ISO,...] (last few, for undo) }
@@ -137,7 +159,7 @@
   function render() {
     els.add.textContent = state.count.toLocaleString("ru-RU");
     els.add.setAttribute("aria-label", "Медитаций: " + state.count + ". Нажмите, чтобы добавить");
-    els.undo.classList.toggle("on", !!(state.last && state.last.length));
+    els.undo.hidden = !(state.last && state.last.length);
   }
 
   function saveLocal() {
@@ -188,6 +210,23 @@
       state.days[k] -= 1;
       if (state.days[k] <= 0) delete state.days[k];
     }
+    render(); persist();
+  });
+
+  els.edit.addEventListener("click", () => {
+    const open = els.form.hidden;
+    els.form.hidden = !open;
+    if (open) { els.input.value = String(state.count); els.input.focus(); els.input.select(); }
+  });
+
+  els.form.addEventListener("submit", e => {
+    e.preventDefault();
+    const n = Math.floor(Number(els.input.value));
+    if (!Number.isFinite(n) || n < 0) { showNote("Впишите целое число от 0."); return; }
+    state.count = n;
+    state.last = [];
+    els.form.hidden = true;
+    showNote("");
     render(); persist();
   });
 
