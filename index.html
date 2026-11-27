@@ -19,6 +19,7 @@
   }
   :root[data-theme="dark"] { --bg: #121a21; --bg-deep: #0b1116; --muted: #8c9ea5; --fg: #dfe8ea; color-scheme: dark; }
 
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     background: radial-gradient(120% 80% at 50% 0%, var(--bg) 40%, var(--bg-deep) 100%) fixed, var(--bg);
@@ -136,7 +137,7 @@
 
 <script>
 (function () {
-  const LS_KEY = "meditation-counter-v1";
+  const LS_KEY = "meditation-counter-v2";
   const els = {
     add: document.getElementById("add"),
     undo: document.getElementById("undo"),
@@ -146,20 +147,23 @@
     input: document.getElementById("edit-input"),
   };
 
-  // state: { count, days: { "YYYY-MM-DD": n }, last: [ISO,...] (last few, for undo) }
-  let state = { count: 0, days: {}, last: [] };
-  let ref = null;
-  let writing = Promise.resolve();
+  // count: last value the storage confirmed; pending: taps not yet saved there.
+  let state = { count: 0, pending: 0 };
+  let sessionTaps = 0;   // taps made on this open page, for "undo"
+  let backend = null;    // { add(delta) -> Promise<count>, set(n) -> Promise<count> }
+  let busy = false;
 
-  function dayKey(d = new Date()) {
-    const p = n => String(n).padStart(2, "0");
-    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
-  }
+  const shown = () => Math.max(0, state.count + state.pending);
 
   function render() {
-    els.add.textContent = state.count.toLocaleString("ru-RU");
-    els.add.setAttribute("aria-label", "Медитаций: " + state.count + ". Нажмите, чтобы добавить");
-    els.undo.hidden = !(state.last && state.last.length);
+    els.add.textContent = shown().toLocaleString("ru-RU");
+    els.add.setAttribute("aria-label", "Медитаций: " + shown() + ". Нажмите, чтобы добавить");
+    els.undo.hidden = sessionTaps <= 0;
+  }
+
+  function showNote(text) {
+    els.note.textContent = text;
+    els.note.hidden = !text;
   }
 
   function saveLocal() {
@@ -170,103 +174,157 @@
       const raw = localStorage.getItem(LS_KEY);
       if (raw) {
         const s = JSON.parse(raw);
-        if (s && typeof s.count === "number") return s;
+        if (s && typeof s.count === "number") return { count: s.count, pending: Number(s.pending) || 0 };
       }
+      const old = JSON.parse(localStorage.getItem("meditation-counter-v1") || "null");
+      if (old && typeof old.count === "number") return { count: old.count, pending: 0 };
     } catch (e) {}
     return null;
   }
 
-  function showNote(text) {
-    els.note.textContent = text;
-    els.note.hidden = !text;
-  }
-
-  function persist() {
+  // Send unsaved taps to the storage, one request at a time.
+  async function flush() {
     saveLocal();
-    if (!ref) return;
-    const body = JSON.parse(JSON.stringify(state));
-    writing = writing.then(() => ref.set(body)).catch(() => {
-      showNote("Не получилось сохранить в облако. Число сохранено на этом устройстве.");
-    });
+    if (!backend || busy || state.pending === 0) return;
+    busy = true;
+    const d = state.pending;
+    try {
+      const count = await backend.add(d);
+      state.pending -= d;
+      state.count = count;
+      showNote("");
+    } catch (e) {
+      showNote("Нет связи с базой. Нажатия сохранятся, когда связь вернётся.");
+    }
+    busy = false;
+    saveLocal();
+    render();
+    if (state.pending !== 0 && els.note.hidden) flush();
   }
 
   els.add.addEventListener("click", () => {
-    const now = new Date();
-    const k = dayKey(now);
-    state.count += 1;
-    state.days[k] = (state.days[k] || 0) + 1;
-    state.last = (state.last || []).concat(now.toISOString()).slice(-5);
+    state.pending += 1;
+    sessionTaps += 1;
     els.add.classList.remove("flash"); void els.add.offsetWidth; els.add.classList.add("flash");
-    render(); persist();
+    render(); flush();
   });
 
   els.undo.addEventListener("click", () => {
-    if (!state.last || !state.last.length || state.count <= 0) return;
-    const iso = state.last[state.last.length - 1];
-    const k = dayKey(new Date(iso));
-    state.last = state.last.slice(0, -1);
-    state.count -= 1;
-    if (state.days[k]) {
-      state.days[k] -= 1;
-      if (state.days[k] <= 0) delete state.days[k];
-    }
-    render(); persist();
+    if (sessionTaps <= 0 || shown() <= 0) return;
+    state.pending -= 1;
+    sessionTaps -= 1;
+    render(); flush();
   });
 
   els.edit.addEventListener("click", () => {
     const open = els.form.hidden;
     els.form.hidden = !open;
-    if (open) { els.input.value = String(state.count); els.input.focus(); els.input.select(); }
+    if (open) { els.input.value = String(shown()); els.input.focus(); els.input.select(); }
   });
 
-  els.form.addEventListener("submit", e => {
+  els.form.addEventListener("submit", async e => {
     e.preventDefault();
     const n = Math.floor(Number(els.input.value));
     if (!Number.isFinite(n) || n < 0) { showNote("Впишите целое число от 0."); return; }
-    state.count = n;
-    state.last = [];
     els.form.hidden = true;
-    showNote("");
-    render(); persist();
+    sessionTaps = 0;
+    if (!backend) { state = { count: n, pending: 0 }; saveLocal(); render(); return; }
+    state = { count: state.count, pending: n - state.count };
+    render();
+    try {
+      state = { count: await backend.set(n), pending: 0 };
+      showNote("");
+    } catch (err) {
+      showNote("Нет связи с базой. Число сохранится, когда связь вернётся.");
+    }
+    saveLocal(); render();
   });
 
-  const local = loadLocal();
-  if (local) state = Object.assign({ days: {}, last: [] }, local);
-  render();
+  window.addEventListener("online", flush);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); } });
 
-  async function connect() {
-    if (!window.claude || !window.claude.use) return;
+  // --- Storage 1: the claude.ai artifact database (when opened on claude.ai) ---
+  async function connectClaude() {
+    if (!window.claude || !window.claude.use) return false;
     try {
       const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
-      if (!db || !user) return;
+      if (!db || !user) return false;
       const id = await user.id();
-      if (!id) return;
-      ref = db.doc("data/users/" + id + "/counter");
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) showNote("Облако пока не отвечает. Нажатия сохраняются на этом устройстве.");
-      }, 10000);
+      if (!id) return false;
+      const ref = db.doc("data/users/" + id + "/counter");
+      let latest = null;
+      const first = await ref.get();
+      if (first.exists && typeof first.data().count === "number") latest = first.data().count;
+      backend = {
+        add: async d => { const n = Math.max(0, (latest || 0) + d); await ref.set({ count: n }); latest = n; return n; },
+        set: async n => { await ref.set({ count: n }); latest = n; return n; },
+        get: async () => latest,
+      };
       ref.onSnapshot(snap => {
-        if (snap.exists) {
-          const d = snap.data();
-          if (d && typeof d.count === "number") {
-            state = { count: d.count, days: Object.assign({}, d.days || {}), last: (d.last || []).slice() };
-            saveLocal();
-            render();
-          }
-        } else if (!snap.metadata.fromCache && state.count > 0 && !settled) {
-          persist();
+        if (snap.exists && !snap.metadata.hasPendingWrites && typeof snap.data().count === "number") {
+          latest = snap.data().count;
+          if (!busy) { state.count = latest; saveLocal(); render(); }
         }
-        if (!snap.metadata.fromCache && !settled) {
-          settled = true; clearTimeout(timer); showNote("");
-        }
-      }, () => {
-        settled = true; clearTimeout(timer);
-        ref = null;
-        showNote("Облако недоступно. Нажатия сохраняются на этом устройстве.");
-      });
+      }, () => {});
+      return { initial: latest };
+    } catch (e) { return false; }
+  }
+
+  // --- Storage 2: the Vercel database (/api/count) ---
+  async function api(method, body) {
+    const r = await fetch("/api/count", {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { const err = new Error(data.error || "http_" + r.status); err.code = data.error; throw err; }
+    return data;
+  }
+  async function connectServer() {
+    if (location.protocol === "file:") return false;
+    try {
+      const data = await api("GET");
+      backend = {
+        add: async d => (await api("POST", { op: "add", by: d })).count,
+        set: async n => (await api("POST", { op: "set", value: n })).count,
+        get: async () => (await api("GET")).count,
+      };
+      return { initial: data.count };
+    } catch (e) {
+      if (e.code === "database_not_connected") showNote("База не подключена. Число сохраняется только на этом устройстве.");
+      return false;
+    }
+  }
+
+  async function refresh() {
+    if (!backend || busy || !backend.get) return;
+    try {
+      const c = await backend.get();
+      if (typeof c === "number" && !busy) { state.count = c; saveLocal(); render(); }
+      flush();
     } catch (e) {}
   }
-  connect();
+
+  const local = loadLocal();
+  if (local) state = local;
+  render();
+
+  (async function start() {
+    const conn = (await connectClaude()) || (await connectServer());
+    if (!conn) return;
+    if (conn.initial === null || conn.initial === undefined) {
+      // Storage is empty: move what this device has into it.
+      const n = shown();
+      state = { count: 0, pending: 0 };
+      if (n > 0) {
+        try { state.count = await backend.set(n); } catch (e) { state.pending = n; }
+      }
+    } else {
+      state.count = conn.initial;
+    }
+    saveLocal(); render(); flush();
+  })();
 })();
 </script>
