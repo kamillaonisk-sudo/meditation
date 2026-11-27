@@ -1,0 +1,277 @@
+<title>Счётчик медитаций</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600&family=Sora:wght@200;300&display=swap">
+<style>
+  /* Layout: one quiet screen — the number, one round button, a single line of context below. */
+  :root {
+    --bg: #e9eef0;
+    --bg-deep: #d7e0e3;
+    --fg: #22323a;
+    --muted: #5f7179;
+    --accent: #4f7d6c;
+    --accent-soft: rgba(79, 125, 108, .16);
+    --on-accent: #f4f8f6;
+    --font-display: "Sora", "Manrope", system-ui, sans-serif;
+    --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121a21; --bg-deep: #0b1116; --fg: #dfe8ea; --muted: #8c9ea5;
+      --accent: #7fb09c; --accent-soft: rgba(127, 176, 156, .16); --on-accent: #0f1a16;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121a21; --bg-deep: #0b1116; --fg: #dfe8ea; --muted: #8c9ea5;
+    --accent: #7fb09c; --accent-soft: rgba(127, 176, 156, .16); --on-accent: #0f1a16;
+    color-scheme: dark;
+  }
+
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(120% 80% at 50% 0%, var(--bg) 40%, var(--bg-deep) 100%) fixed, var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2.25rem;
+    padding-block: 2rem;
+    text-align: center;
+  }
+  .label {
+    font-size: .8rem;
+    font-weight: 600;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+  .count {
+    font-family: var(--font-display);
+    font-weight: 200;
+    font-size: clamp(5.5rem, 28vw, 10rem);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    margin: .4rem 0 0;
+    transition: transform .35s ease;
+  }
+  .count.bump { transform: scale(1.06); }
+  .unit { margin: .5rem 0 0; color: var(--muted); font-size: 1rem; }
+
+  .breath {
+    position: relative;
+    width: min(62vw, 15rem);
+    aspect-ratio: 1;
+    max-width: 100%;
+    display: grid;
+    place-items: center;
+  }
+  .breath::before {
+    content: "";
+    position: absolute;
+    inset: -12%;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    animation: breathe 8s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { transform: scale(.88); opacity: .6; } 50% { transform: scale(1); opacity: 1; } }
+
+  #add {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    font: 600 1.15rem/1.3 var(--font-body);
+    cursor: pointer;
+    box-shadow: 0 10px 30px -12px var(--accent);
+    transition: transform .15s ease, filter .2s ease;
+  }
+  #add:hover { filter: brightness(1.05); }
+  #add:active { transform: scale(.96); }
+  #add:focus-visible { outline: 3px solid var(--fg); outline-offset: 6px; }
+  #add:disabled { opacity: .55; cursor: default; }
+
+  .meta { display: flex; flex-direction: column; align-items: center; gap: .6rem; min-height: 4.5rem; }
+  .today { margin: 0; color: var(--muted); font-size: .95rem; }
+  .today b { color: var(--fg); font-weight: 600; }
+  #undo {
+    border: 0; background: none; padding: .4rem .8rem; border-radius: 999px;
+    color: var(--muted); font: 500 .85rem var(--font-body); cursor: pointer;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  #undo:hover { color: var(--fg); }
+  #undo:focus-visible { outline: 2px solid var(--accent); }
+  .note { margin: 0; font-size: .8rem; color: var(--muted); max-width: 32ch; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .breath::before { animation: none; }
+    .count, #add { transition: none; }
+  }
+</style>
+
+<main>
+  <div>
+    <p class="label">Всего медитаций</p>
+    <p class="count" id="count">0</p>
+    <p class="unit" id="unit">пока ни одной</p>
+  </div>
+
+  <div class="breath">
+    <button id="add" type="button">Я помедитировала</button>
+  </div>
+
+  <div class="meta">
+    <p class="today" id="today">Сегодня: <b>0</b></p>
+    <button id="undo" type="button" hidden>Отменить последнюю</button>
+    <p class="note" id="note" hidden></p>
+  </div>
+</main>
+
+<script>
+(function () {
+  const LS_KEY = "meditation-counter-v1";
+  const els = {
+    count: document.getElementById("count"),
+    unit: document.getElementById("unit"),
+    add: document.getElementById("add"),
+    today: document.getElementById("today"),
+    undo: document.getElementById("undo"),
+    note: document.getElementById("note"),
+  };
+
+  // state: { count, days: { "YYYY-MM-DD": n }, last: [ISO,...] (last few, for undo) }
+  let state = { count: 0, days: {}, last: [] };
+  let ref = null;          // db document, when available
+  let writing = Promise.resolve();
+
+  function dayKey(d = new Date()) {
+    const p = n => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+
+  function plural(n) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return "медитация";
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return "медитации";
+    return "медитаций";
+  }
+
+  function render() {
+    els.count.textContent = String(state.count);
+    els.unit.textContent = state.count === 0 ? "пока ни одной" : plural(state.count);
+    const t = state.days[dayKey()] || 0;
+    els.today.replaceChildren("Сегодня: ", Object.assign(document.createElement("b"), { textContent: String(t) }));
+    els.undo.hidden = !(state.last && state.last.length);
+  }
+
+  function bump() {
+    els.count.classList.remove("bump");
+    void els.count.offsetWidth;
+    els.count.classList.add("bump");
+    setTimeout(() => els.count.classList.remove("bump"), 350);
+  }
+
+  function saveLocal() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function loadLocal() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s && typeof s.count === "number") return s;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function persist() {
+    saveLocal();
+    if (!ref) return;
+    const body = JSON.parse(JSON.stringify(state));
+    writing = writing.then(() => ref.set(body)).catch(err => {
+      showNote("Не получилось сохранить в облако. Число сохранено на этом устройстве.");
+    });
+  }
+
+  function showNote(text) {
+    els.note.textContent = text;
+    els.note.hidden = !text;
+  }
+
+  els.add.addEventListener("click", () => {
+    const now = new Date();
+    const k = dayKey(now);
+    state.count += 1;
+    state.days[k] = (state.days[k] || 0) + 1;
+    state.last = (state.last || []).concat(now.toISOString()).slice(-5);
+    render(); bump(); persist();
+  });
+
+  els.undo.addEventListener("click", () => {
+    if (!state.last || !state.last.length || state.count <= 0) return;
+    const iso = state.last[state.last.length - 1];
+    const k = dayKey(new Date(iso));
+    state.last = state.last.slice(0, -1);
+    state.count -= 1;
+    if (state.days[k]) {
+      state.days[k] -= 1;
+      if (state.days[k] <= 0) delete state.days[k];
+    }
+    render(); persist();
+  });
+
+  // Start with whatever this device remembers, then switch to the cloud copy.
+  const local = loadLocal();
+  if (local) state = Object.assign({ days: {}, last: [] }, local);
+  render();
+
+  async function connect() {
+    if (!window.claude || !window.claude.use) return;
+    try {
+      const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+      if (!db || !user) return;
+      const id = await user.id();
+      if (!id) return;
+      ref = db.doc("data/users/" + id + "/counter");
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) showNote("Облако пока не отвечает. Нажатия сохраняются на этом устройстве.");
+      }, 10000);
+      ref.onSnapshot(snap => {
+        if (snap.exists) {
+          const d = snap.data();
+          if (d && typeof d.count === "number") {
+            state = { count: d.count, days: Object.assign({}, d.days || {}), last: (d.last || []).slice() };
+            saveLocal();
+            render();
+          }
+        } else if (!snap.metadata.fromCache && state.count > 0 && !settled) {
+          // First visit with the cloud: move the local count up.
+          persist();
+        }
+        if (!snap.metadata.fromCache && !settled) {
+          settled = true; clearTimeout(timer); showNote("");
+        }
+      }, () => {
+        settled = true; clearTimeout(timer);
+        ref = null;
+        showNote("Облако недоступно. Нажатия сохраняются на этом устройстве.");
+      });
+    } catch (e) {}
+  }
+  connect();
+})();
+</script>
